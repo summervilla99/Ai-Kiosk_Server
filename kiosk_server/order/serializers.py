@@ -1,14 +1,93 @@
 # kiosk_server/categories/serializers.py
 
 from rest_framework import serializers
-from .models import Category, Menu
+from .models import Category, Options, OptionChoice, Menu, Order_amount, Order, Order_menu, Order_choice_order_menu
 
 class CategorySerializer(serializers.ModelSerializer):
+    owner_id = serializers.ReadOnlyField(source='owner.username')
+
     class Meta:
         model = Category
-        fields = ['category_id', 'category_name']
+        fields = ['id', 'category_name', 'owner_id', 'is_deleted']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        owner_id = request.user
+        validated_data['owner_id'] = owner_id
+        return super().create(validated_data)
+
+
+class OptionChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OptionChoice
+        fields = ['choice_name', 'extra_cost']
+
+class OptionSerializer(serializers.ModelSerializer):
+    choices = OptionChoiceSerializer(many=True)
+    category_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = Options
+        fields = ['id', 'category_id', 'option_name', 'is_deleted', 'choices']
+
+    def create(self, validated_data):
+        choices_data = validated_data.pop('choices', [])
+        option = Options.objects.create(**validated_data)
+        for choice_data in choices_data:
+            OptionChoice.objects.create(option_id=option, **choice_data)
+        return option
 
 class MenuSerializer(serializers.ModelSerializer):
+    category_id = serializers.ReadOnlyField(source='category_id.id')
+    
     class Meta:
         model = Menu
+        fields = ['id', 'category_id', 'name', 'image', 'price', 'is_deleted', 'created_at', 'updated_at']
+
+class OrderAmountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Order_amount
         fields = '__all__'
+
+class OptionChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OptionChoice
+        fields = ['id', 'choice_name', 'extra_cost']
+
+class OrderChoiceOrderMenuSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Order_choice_order_menu
+        fields = ['option_choice_id']
+
+class OrderMenuSerializer(serializers.ModelSerializer):
+    options = OrderChoiceOrderMenuSerializer(many=True)
+
+    class Meta:
+        model = Order_menu
+        fields = ['menu_id', 'count', 'options']
+
+    def create(self, validated_data):
+        options_data = validated_data.pop('options')
+        order_menu = Order_menu.objects.create(**validated_data)
+        for option_data in options_data:
+            option_choice = OptionChoice.objects.get(id=option_data['option_choice_id'].id)
+            Order_choice_order_menu.objects.create(order_menu_id=order_menu, option_choice_id=option_choice)
+        return order_menu
+
+class OrderSerializer(serializers.ModelSerializer):
+    order_menus = OrderMenuSerializer(many=True)
+
+    class Meta:
+        model = Order
+        fields = ['membership_id', 'total_price', 'order_num', 'order_age', 'package', 'order_menus']
+
+    def create(self, validated_data):
+        order_menus_data = validated_data.pop('order_menus')
+        order = Order.objects.create(**validated_data)
+        for order_menu_data in order_menus_data:
+            options_data = order_menu_data.pop('options')
+            order_menu = Order_menu.objects.create(order_id=order, **order_menu_data)
+            for option_data in options_data:
+                option_choice = OptionChoice.objects.get(id=option_data['option_choice_id'].id)
+                Order_choice_order_menu.objects.create(order_menu_id=order_menu, option_choice_id=option_choice)
+        return order
